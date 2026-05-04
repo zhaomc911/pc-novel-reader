@@ -1,113 +1,111 @@
 # PC Novel Reader
 
-PC Novel Reader is a calm, ad-free desktop novel reader for local TXT books.
+**PC Novel Reader** 是一款简洁、无广告的电脑端本地小说阅读器。  
+它适合想把 TXT 小说放在自己电脑里安静阅读的人：没有信息流、没有推荐、没有弹窗，只保留书架、目录和正文。
 
-It is designed for people who want a clean personal reading space: import your own novels, keep them in a local bookshelf, and read without ads, feeds, recommendations, or distractions.
+**PC Novel Reader** is a simple, ad-free desktop novel reader for local TXT books.  
+It is built for people who want a quiet personal reading space without feeds, recommendations, popups, or distractions.
 
-## Download
+## 下载 / Download
 
-Pre-release builds are available on the Releases page:
+你可以在 Releases 页面下载测试版：
+
+Download the pre-release version here:
 
 [Download PC Novel Reader](https://github.com/zhaomc911/pc-novel-reader/releases)
 
-Current builds target:
+当前支持：
+
+Currently available for:
 
 - macOS
 - Windows
 
-Because the app is not code-signed yet, your system may show a security warning the first time you open it. On macOS, right-click the app and choose `Open`. On Windows, SmartScreen may require manual confirmation.
+> 目前应用还没有做代码签名。首次打开时，macOS 或 Windows 可能会出现安全提示。  
+> The app is not code-signed yet, so your system may show a security warning the first time you open it.
 
-## Features
+macOS 用户如果无法直接打开，可以右键应用，选择 `打开`。  
+On macOS, right-click the app and choose `Open` if it cannot be opened normally.
 
-- Import local TXT novels
-- Automatically detect chapter headings
-- Clean noisy chapter-title notes such as update messages or author side notes
-- Keep a local bookshelf
-- Remember reading progress
-- Separate library and reading views
-- Collapsible chapter list for focused reading
-- Desktop packaging powered by Tauri
+## 主要功能 / Features
 
-## Privacy
+- 导入本地 TXT 小说  
+  Import local TXT novels
 
-PC Novel Reader is local-first.
+- 自动识别章节目录  
+  Automatically detect chapters
 
-- Imported books are stored on your own computer.
-- Reading data stays in local browser/app storage.
-- The app does not require an account.
-- The app does not include ads or remote recommendation feeds.
+- 本地书架管理  
+  Manage books in a local bookshelf
 
-## Development
+- 记录阅读进度  
+  Remember reading progress
 
-Requirements:
+- 清理部分章节标题里的作者题外话或更新说明  
+  Clean some noisy chapter-title notes, such as update messages or author side notes
 
-- Node.js
-- pnpm
-- Rust toolchain
+- 书库页和阅读页分离，阅读时更专注  
+  Separate library and reading views for a calmer reading experience
 
-Install dependencies:
+- 可收起章节目录  
+  Collapsible chapter list
 
-```bash
-pnpm install
-```
+## 为什么做这个 / Why
 
-Run the web development server:
+很多小说阅读环境越来越复杂：广告、推荐、弹窗、会员提示、信息流都会打断阅读。  
+PC Novel Reader 希望回到最朴素的阅读体验：打开一本本地小说，安静地读下去。
 
-```bash
-pnpm dev
-```
+Many reading apps are filled with ads, recommendations, popups, and feeds.  
+PC Novel Reader is an attempt to return to a simpler experience: open a local book and read quietly.
 
-Run the desktop app in development mode:
+## 隐私 / Privacy
 
-```bash
-pnpm tauri:dev
-```
+- 你的小说文件保存在你自己的电脑上。  
+  Your books stay on your own computer.
 
-Build the frontend:
+- 阅读数据保存在本地。  
+  Reading data is stored locally.
 
-```bash
-pnpm build
-```
+- 不需要账号。  
+  No account is required.
 
-Build a macOS `.app` bundle:
+- 没有广告和远程推荐流。  
+  No ads or remote recommendation feeds.
 
-```bash
-pnpm tauri:build:mac-app
-```
+## 给开发者 / For Developers
 
-Build desktop bundles for the current platform:
+这个项目使用：
 
-```bash
-pnpm tauri:build
-```
-
-Build outputs are written to:
-
-```bash
-src-tauri/target/release/bundle
-```
-
-## Tech Stack
+Built with:
 
 - Vue 3
 - TypeScript
 - Vite
 - Tauri 2
-- localForage
 
-## Release
+本地运行：
 
-This repository includes a GitHub Actions workflow for beta builds:
+Run locally:
 
 ```bash
-.github/workflows/desktop-build.yml
+pnpm install
+pnpm dev
 ```
 
-Pushing a version tag creates a pre-release and uploads desktop build assets:
+运行桌面版：
+
+Run the desktop app:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+pnpm tauri:dev
+```
+
+构建当前平台应用：
+
+Build for the current platform:
+
+```bash
+pnpm tauri:build
 ```
 
 ## License
