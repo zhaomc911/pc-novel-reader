@@ -8,10 +8,51 @@ function normalize(text: string) {
   return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 }
 
+function decodeWith(label: string, bytes: Uint8Array, fatal = false) {
+  return new TextDecoder(label, { fatal }).decode(bytes);
+}
+
+function isLikelyBadDecode(text: string) {
+  if (!text) return false;
+  const replacementCount = [...text].filter((char) => char === "\uFFFD").length;
+  return replacementCount / text.length > 0.01;
+}
+
+export function decodeTxtBytes(bytes: Uint8Array) {
+  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return decodeWith("utf-8", bytes.slice(3));
+  }
+
+  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) {
+    return decodeWith("utf-16le", bytes.slice(2));
+  }
+
+  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) {
+    return decodeWith("utf-16be", bytes.slice(2));
+  }
+
+  try {
+    return decodeWith("utf-8", bytes, true);
+  } catch {
+    const gb18030Text = decodeWith("gb18030", bytes);
+    if (!isLikelyBadDecode(gb18030Text)) return gb18030Text;
+    return decodeWith("utf-8", bytes);
+  }
+}
+
+function formatFromFileName(name: string): Book["format"] {
+  return /\.(md|markdown)$/i.test(name) ? "md" : "txt";
+}
+
+function normalizeChapterTitle(title: string) {
+  return title.replace(/^\s*#{1,6}\s+/, "").trim();
+}
+
 // 常见章节标题规则（后面你可以继续扩展）
 const CHAPTER_PATTERNS: RegExp[] = [
   /^\s*第[零一二三四五六七八九十百千万0-9]{1,9}[章节卷回]\s*.*$/u,
   /^\s*(Chapter|CHAPTER)\s+\d+.*$/u,
+  /^\s*#{1,6}\s+\S.*$/u,
 ];
 
 const NOTE_PATTERN = /[（(【\[]([^）)\]】]{1,48})[）)\]】]/gu;
@@ -24,7 +65,7 @@ function isAuthorNote(note: string) {
 }
 
 export function cleanChapterTitle(title: string) {
-  return title
+  return normalizeChapterTitle(title)
     .replace(NOTE_PATTERN, (match, note: string) => (isAuthorNote(note) ? "" : match))
     .replace(/\s+/g, " ")
     .trim();
@@ -77,7 +118,7 @@ export function parseTxtContent(name: string, text: string): Book {
   return {
     id: uid(),
     title: name.replace(/\.[^.]+$/, ""),
-    format: "txt",
+    format: formatFromFileName(name),
     createdAt: Date.now(),
     rawText: raw,
     chapters: buildChapters(raw),
@@ -85,6 +126,10 @@ export function parseTxtContent(name: string, text: string): Book {
   };
 }
 
+export function parseTxtBytes(name: string, bytes: Uint8Array): Book {
+  return parseTxtContent(name, decodeTxtBytes(bytes));
+}
+
 export async function parseTxt(file: File): Promise<Book> {
-  return parseTxtContent(file.name, await file.text());
+  return parseTxtBytes(file.name, new Uint8Array(await file.arrayBuffer()));
 }

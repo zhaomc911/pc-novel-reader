@@ -25,4 +25,22 @@ export type Book = {
     scrollTop?: number;
     updatedAt?: number;
   };
+
+  bookmarks?: {
+    id: string;
+    chapterId: string;
+    chapterTitle: string;
+    scrollTop: number;
+    createdAt: number;
+  }[];
+
+  notes?: {
+    id: string;
+    chapterId: string;
+    chapterTitle: string;
+    selectedText: string;
+    content: string;
+    scrollTop: number;
+    createdAt: number;
+  }[];
 };

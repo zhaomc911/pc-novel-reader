@@ -1,6 +1,6 @@
 import { open } from "@tauri-apps/plugin-dialog";
-import { readTextFile } from "@tauri-apps/plugin-fs";
-import { parseTextToBook } from "./parsers";
+import { readFile } from "@tauri-apps/plugin-fs";
+import { parseBytesToBook } from "./parsers";
 
 const pathSeparator = /[/\\]/;
 
@@ -12,15 +12,17 @@ function fileNameFromPath(path: string) {
   return path.split(pathSeparator).pop() ?? "untitled.txt";
 }
 
-export async function importTxtWithDesktopDialog() {
+export async function importTextWithDesktopDialog() {
   const selected = await open({
     multiple: false,
     directory: false,
-    filters: [{ name: "Text Novel", extensions: ["txt"] }],
+    filters: [{ name: "Text Files", extensions: ["txt", "text", "md", "markdown", "log"] }],
   });
 
   if (!selected || Array.isArray(selected)) return null;
 
-  const content = await readTextFile(selected);
-  return parseTextToBook(fileNameFromPath(selected), content);
+  const content = await readFile(selected);
+  return parseBytesToBook(fileNameFromPath(selected), content);
 }
+
+export const importTxtWithDesktopDialog = importTextWithDesktopDialog;

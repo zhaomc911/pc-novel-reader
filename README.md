@@ -1,9 +1,9 @@
 # PC Novel Reader
 
 **PC Novel Reader** 是一款简洁、无广告的电脑端本地小说阅读器。  
-它适合想把 TXT 小说放在自己电脑里安静阅读的人：没有信息流、没有推荐、没有弹窗，只保留书架、目录和正文。
+它适合想把 TXT、Markdown 等本地文本小说放在自己电脑里安静阅读的人：没有信息流、没有推荐、没有弹窗，只保留书架、目录和正文。
 
-**PC Novel Reader** is a simple, ad-free desktop novel reader for local TXT books.  
+**PC Novel Reader** is a simple, ad-free desktop novel reader for local text books such as TXT and Markdown files.  
 It is built for people who want a quiet personal reading space without feeds, recommendations, popups, or distractions.
 
 ## 下载 / Download
@@ -29,8 +29,8 @@ On macOS, right-click the app and choose `Open` if it cannot be opened normally.
 
 ## 主要功能 / Features
 
-- 导入本地 TXT 小说  
-  Import local TXT novels
+- 导入本地 TXT、Markdown、日志等纯文本文件  
+  Import local TXT, Markdown, log, and other plain-text files
 
 - 自动识别章节目录  
   Automatically detect chapters
