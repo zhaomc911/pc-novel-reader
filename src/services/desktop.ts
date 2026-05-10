@@ -16,13 +16,33 @@ export async function importTextWithDesktopDialog() {
   const selected = await open({
     multiple: false,
     directory: false,
-    filters: [{ name: "Text Files", extensions: ["txt", "text", "md", "markdown", "log"] }],
+    filters: [
+      {
+        name: "Readable Files",
+        extensions: [
+          "txt",
+          "text",
+          "md",
+          "markdown",
+          "log",
+          "pdf",
+          "docx",
+          "epub",
+          "rtf",
+          "html",
+          "htm",
+          "xhtml",
+          "fb2",
+          "odt",
+        ],
+      },
+    ],
   });
 
   if (!selected || Array.isArray(selected)) return null;
 
   const content = await readFile(selected);
-  return parseBytesToBook(fileNameFromPath(selected), content);
+  return await parseBytesToBook(fileNameFromPath(selected), content);
 }
 
 export const importTxtWithDesktopDialog = importTextWithDesktopDialog;

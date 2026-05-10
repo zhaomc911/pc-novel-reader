@@ -41,7 +41,15 @@ export function decodeTxtBytes(bytes: Uint8Array) {
 }
 
 function formatFromFileName(name: string): Book["format"] {
-  return /\.(md|markdown)$/i.test(name) ? "md" : "txt";
+  if (/\.(md|markdown)$/i.test(name)) return "md";
+  if (/\.pdf$/i.test(name)) return "pdf";
+  if (/\.docx$/i.test(name)) return "docx";
+  if (/\.epub$/i.test(name)) return "epub";
+  if (/\.rtf$/i.test(name)) return "rtf";
+  if (/\.(html|htm|xhtml)$/i.test(name)) return "html";
+  if (/\.fb2$/i.test(name)) return "fb2";
+  if (/\.odt$/i.test(name)) return "odt";
+  return "txt";
 }
 
 function normalizeChapterTitle(title: string) {

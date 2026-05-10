@@ -1,12 +1,39 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from "vue";
 import type { Book, Chapter } from "./types/book";
 import { listBooks, removeBook, saveBook, updateBookState } from "./services/storage";
 import { cleanChapterTitle } from "./services/parsers/txt";
 import { importTextWithDesktopDialog, isTauriRuntime } from "./services/desktop";
 import { selectReadingQuote } from "./services/quotes";
+import {
+  checkForAppUpdate,
+  downloadAndInstallAppUpdate,
+  type AppUpdateState,
+} from "./services/updater";
 
 type AppView = "library" | "reader";
+type ReadingTheme = "paper" | "eye" | "sepia" | "dark";
+type ReadingFont = "system" | "serif" | "songti" | "kaiti" | "fangsong" | "yuanti" | "hei" | "mono";
+type ReadingSettings = {
+  fontSize: number;
+  lineHeight: number;
+  pageWidth: number;
+  theme: ReadingTheme;
+  font: ReadingFont;
+};
+type BookDraft = {
+  title: string;
+  author: string;
+  category: string;
+  coverText: string;
+};
+type SearchResult = {
+  id: string;
+  chapterId: string;
+  chapterTitle: string;
+  index: number;
+  snippet: string;
+};
 type ReaderSession = {
   view: AppView;
   bookId?: string;
@@ -16,6 +43,24 @@ type ReaderSession = {
 };
 
 const READER_SESSION_KEY = "pc-novel-reader:last-session";
+const READING_SETTINGS_KEY = "pc-novel-reader:reading-settings";
+const DEFAULT_READING_SETTINGS: ReadingSettings = {
+  fontSize: 19,
+  lineHeight: 2,
+  pageWidth: 980,
+  theme: "paper",
+  font: "system",
+};
+const FONT_FAMILIES: Record<ReadingFont, string> = {
+  system: 'Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+  serif: 'Georgia, "Times New Roman", "Noto Serif SC", "Source Han Serif SC", serif',
+  songti: '"Songti SC", "SimSun", "Noto Serif SC", serif',
+  kaiti: '"Kaiti SC", "KaiTi", "STKaiti", "Noto Serif SC", serif',
+  fangsong: '"STFangsong", "FangSong", "FangSong_GB2312", "Noto Serif SC", serif',
+  yuanti: '"Yuanti SC", "YouYuan", "Microsoft YaHei", sans-serif',
+  hei: 'Inter, "PingFang SC", "Microsoft YaHei", "Noto Sans SC", sans-serif',
+  mono: '"SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace',
+};
 
 const books = ref<Book[]>([]);
 const activeBook = ref<Book | null>(null);
@@ -25,15 +70,24 @@ const chapterListCollapsed = ref(false);
 const chapterContentRef = ref<HTMLElement | null>(null);
 const busy = ref(false);
 const error = ref("");
+const notice = ref("");
 const desktopRuntime = isTauriRuntime();
 const selectedText = ref("");
 const noteDraftOpen = ref(false);
 const noteDraftText = ref("");
 const selectionToolbar = ref({ visible: false, top: 0, left: 0 });
 const browsingSavedMark = ref(false);
+const readingSettingsOpen = ref(false);
+const searchPanelOpen = ref(false);
+const searchQuery = ref("");
+const editingBookId = ref<string | null>(null);
+const bookDraft = ref<BookDraft>({ title: "", author: "", category: "", coverText: "" });
 let progressSaveTimer: number | null = null;
+let noticeTimer: number | null = null;
 
 const readingQuote = ref(selectReadingQuote());
+const appUpdateState = shallowRef<AppUpdateState>({ status: "idle" });
+const readingSettings = ref(loadReadingSettings());
 
 const greetingText = computed(() => {
   const hour = new Date().getHours();
@@ -119,6 +173,36 @@ const chapterParagraphs = computed(() =>
     .filter(Boolean),
 );
 
+const searchResults = computed<SearchResult[]>(() => {
+  const book = activeBook.value;
+  const query = searchQuery.value.trim();
+  if (!book?.rawText || !query) return [];
+
+  const raw = book.rawText;
+  const lowerRaw = raw.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const results: SearchResult[] = [];
+
+  for (const chapter of book.chapters ?? []) {
+    let cursor = chapter.start;
+    while (cursor < chapter.end && results.length < 80) {
+      const index = lowerRaw.indexOf(lowerQuery, cursor);
+      if (index === -1 || index >= chapter.end) break;
+      results.push({
+        id: `${chapter.id}-${index}`,
+        chapterId: chapter.id,
+        chapterTitle: displayChapterTitle(chapter),
+        index,
+        snippet: makeSearchSnippet(raw, index, query.length),
+      });
+      cursor = index + Math.max(1, query.length);
+    }
+    if (results.length >= 80) break;
+  }
+
+  return results;
+});
+
 const activeChapterTitle = computed(() =>
   activeChapter.value ? displayChapterTitle(activeChapter.value) : "",
 );
@@ -128,6 +212,22 @@ const activeBookmark = computed(() => {
   if (!chapterId) return null;
   return activeBook.value?.bookmarks?.find((bookmark) => bookmark.chapterId === chapterId) ?? null;
 });
+
+const appUpdateProgressText = computed(() => {
+  if (appUpdateState.value.status !== "downloading") return "";
+  const { downloaded, total } = appUpdateState.value;
+  if (!total) return "正在下载更新...";
+  return `正在下载更新 ${Math.min(100, Math.round((downloaded / total) * 100))}%`;
+});
+
+const readerPageClass = computed(() => `reader-theme-${readingSettings.value.theme}`);
+
+const chapterContentStyle = computed(() => ({
+  maxWidth: `${readingSettings.value.pageWidth}px`,
+  "--reader-font-size": `${readingSettings.value.fontSize}px`,
+  "--reader-line-height": String(readingSettings.value.lineHeight),
+  "--reader-font-family": FONT_FAMILIES[readingSettings.value.font],
+}));
 
 const readUntilChapterIndex = computed(() => {
   const book = activeBook.value;
@@ -241,11 +341,140 @@ function loadReaderSession() {
   }
 }
 
+function loadReadingSettings(): ReadingSettings {
+  try {
+    const saved = localStorage.getItem(READING_SETTINGS_KEY);
+    if (!saved) return { ...DEFAULT_READING_SETTINGS };
+    return normalizeReadingSettings(JSON.parse(saved));
+  } catch {
+    return { ...DEFAULT_READING_SETTINGS };
+  }
+}
+
+function normalizeReadingSettings(value: Partial<ReadingSettings>): ReadingSettings {
+  const fontSize = Number(value.fontSize);
+  const lineHeight = Number(value.lineHeight);
+  const pageWidth = Number(value.pageWidth);
+  return {
+    fontSize: Number.isFinite(fontSize) ? Math.min(28, Math.max(15, fontSize)) : DEFAULT_READING_SETTINGS.fontSize,
+    lineHeight: Number.isFinite(lineHeight)
+      ? Math.min(2.8, Math.max(1.5, lineHeight))
+      : DEFAULT_READING_SETTINGS.lineHeight,
+    pageWidth: Number.isFinite(pageWidth) ? Math.min(1280, Math.max(680, pageWidth)) : DEFAULT_READING_SETTINGS.pageWidth,
+    theme: ["paper", "eye", "sepia", "dark"].includes(value.theme ?? "")
+      ? (value.theme as ReadingTheme)
+      : DEFAULT_READING_SETTINGS.theme,
+    font: ["system", "serif", "songti", "kaiti", "fangsong", "yuanti", "hei", "mono"].includes(value.font ?? "")
+      ? (value.font as ReadingFont)
+      : DEFAULT_READING_SETTINGS.font,
+  };
+}
+
+function saveReadingSettings() {
+  localStorage.setItem(READING_SETTINGS_KEY, JSON.stringify(readingSettings.value));
+}
+
+function resetReadingSettings() {
+  readingSettings.value = { ...DEFAULT_READING_SETTINGS };
+}
+
+function showNotice(message: string) {
+  notice.value = message;
+  if (noticeTimer !== null) window.clearTimeout(noticeTimer);
+  noticeTimer = window.setTimeout(() => {
+    notice.value = "";
+    noticeTimer = null;
+  }, 3600);
+}
+
+function formatImportError(reason: unknown) {
+  const message = reason instanceof Error ? reason.message : String(reason);
+
+  if (/扫描版 PDF|这个 PDF 没有可提取/u.test(message)) {
+    return "导入失败：没有识别到可阅读的文字。\n如果这是扫描版 PDF 或图片型文件，目前暂不支持 OCR。可以先用带 OCR 的工具转换成可复制文字的 PDF、DOCX 或 TXT。";
+  }
+
+  if (/没有可提取的文字内容/u.test(message)) {
+    return `导入失败：这个文件里没有识别到可阅读文字。\n${message}\n可以尝试重新导出文件，或转换为 TXT、DOCX、EPUB 后再导入。`;
+  }
+
+  if (/password|encrypted|密码|加密|protected/i.test(message)) {
+    return "导入失败：这个文件可能受到密码或权限保护。\n请先解除密码保护，或导出为普通 PDF、DOCX、TXT 后再导入。";
+  }
+
+  if (/EPUB|OPF|spine|FictionBook|FB2|ODT|RTF|Word|DOCX|HTML/u.test(message)) {
+    return `导入失败：文件结构无法完整解析。\n${message}\n可以尝试重新导出文件，或转换为 EPUB、PDF、DOCX、TXT 后再导入。`;
+  }
+
+  if (/Unsupported format|暂不支持/u.test(message)) {
+    return "导入失败：暂不支持这个文件格式。\n目前建议使用 TXT、Markdown、PDF、DOCX、EPUB、RTF、HTML、FB2 或 ODT。";
+  }
+
+  return `导入失败：暂时无法读取这个文件。\n${message}`;
+}
+
+function formatGeneralError(reason: unknown) {
+  return reason instanceof Error ? reason.message : String(reason);
+}
+
 function resetNoteUi() {
   selectedText.value = "";
   noteDraftOpen.value = false;
   noteDraftText.value = "";
   selectionToolbar.value = { visible: false, top: 0, left: 0 };
+}
+
+function normalizeBookTitle(value: string) {
+  return value.replace(/\.[^.]+$/, "").replace(/\s+/g, "").trim().toLowerCase();
+}
+
+function stableHash(value: string) {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function createBookFingerprint(book: Book) {
+  const raw = book.rawText ?? "";
+  const sample =
+    raw.length > 8000
+      ? `${raw.slice(0, 4000)}${raw.slice(Math.floor(raw.length / 2), Math.floor(raw.length / 2) + 2000)}${raw.slice(-2000)}`
+      : raw;
+  return stableHash(`${book.format}|${raw.length}|${sample}`);
+}
+
+function isLegacyDuplicate(existing: Book, imported: Book) {
+  const existingRaw = existing.rawText ?? "";
+  const importedRaw = imported.rawText ?? "";
+  if (!existingRaw || !importedRaw) return false;
+  return (
+    normalizeBookTitle(existing.title) === normalizeBookTitle(imported.title) &&
+    existing.format === imported.format &&
+    existingRaw.length === importedRaw.length
+  );
+}
+
+function findDuplicateBook(imported: Book) {
+  const contentHash = imported.contentHash ?? createBookFingerprint(imported);
+  return books.value.find(
+    (book) =>
+      book.contentHash === contentHash ||
+      createBookFingerprint(book) === contentHash ||
+      isLegacyDuplicate(book, imported),
+  );
+}
+
+function coverTextForBook(book: Book) {
+  return (book.coverText || book.title.slice(0, 1) || "书").slice(0, 2);
+}
+
+function makeSearchSnippet(text: string, index: number, length: number) {
+  const start = Math.max(0, index - 34);
+  const end = Math.min(text.length, index + length + 46);
+  return `${start > 0 ? "…" : ""}${text.slice(start, end).replace(/\s+/g, " ").trim()}${end < text.length ? "…" : ""}`;
 }
 
 async function refreshBooks() {
@@ -300,16 +529,95 @@ function openLibrary() {
 
 async function persistAndOpen(book: Book) {
   if (activeBook.value && !browsingSavedMark.value) await saveReadingProgress();
-  await saveBook(book);
-  const saved = upsertBookInMemory(book);
+  const preparedBook = {
+    ...book,
+    contentHash: book.contentHash ?? createBookFingerprint(book),
+  };
+  const duplicate = findDuplicateBook(preparedBook);
+  if (duplicate) {
+    showNotice(`已识别到《${duplicate.title}》在书架中，已为你打开原有书籍。`);
+    openBook(duplicate);
+    return;
+  }
+
+  await saveBook(preparedBook);
+  const saved = upsertBookInMemory(preparedBook);
+  showNotice(`已导入《${saved.title}》。`);
   openBook(saved);
 }
 
 async function importDesktopFile() {
-  await withBusy(async () => {
-    const book = await importTextWithDesktopDialog();
-    if (book) await persistAndOpen(book);
+  await withBusy(
+    async () => {
+      const book = await importTextWithDesktopDialog();
+      if (book) await persistAndOpen(book);
+    },
+    formatImportError,
+  );
+}
+
+async function openSearchResult(result: SearchResult) {
+  const book = activeBook.value;
+  const chapter = book?.chapters?.find((item) => item.id === result.chapterId);
+  if (!book || !chapter) return;
+
+  browsingSavedMark.value = false;
+  resetNoteUi();
+  activeChapterId.value = chapter.id;
+  appView.value = "reader";
+  await nextTick();
+
+  const contentElement = chapterContentRef.value;
+  const ratio = chapter.end > chapter.start ? (result.index - chapter.start) / (chapter.end - chapter.start) : 0;
+  const scrollTop = contentElement
+    ? Math.max(0, Math.round((contentElement.scrollHeight - contentElement.clientHeight) * ratio))
+    : 0;
+
+  await restoreReadingPosition(scrollTop);
+  searchPanelOpen.value = false;
+  const updatedBook = upsertBookInMemory({
+    ...book,
+    progress: {
+      ...book.progress,
+      chapterId: chapter.id,
+      scrollTop,
+      updatedAt: Date.now(),
+    },
   });
+  saveReaderSession("reader", updatedBook, chapter.id, scrollTop);
+  void updateBookState(updatedBook.id, { progress: updatedBook.progress });
+}
+
+function openBookEditor(book: Book) {
+  editingBookId.value = book.id;
+  bookDraft.value = {
+    title: book.title,
+    author: book.author ?? "",
+    category: book.category ?? "",
+    coverText: coverTextForBook(book),
+  };
+}
+
+function closeBookEditor() {
+  editingBookId.value = null;
+  bookDraft.value = { title: "", author: "", category: "", coverText: "" };
+}
+
+async function saveBookDetails() {
+  const book = books.value.find((item) => item.id === editingBookId.value);
+  if (!book) return;
+
+  const draft = bookDraft.value;
+  const updatedBook = upsertBookInMemory({
+    ...book,
+    title: draft.title.trim() || book.title,
+    author: draft.author.trim() || undefined,
+    category: draft.category.trim() || undefined,
+    coverText: draft.coverText.trim().slice(0, 2) || undefined,
+  });
+  await saveBook(updatedBook);
+  showNotice("书籍信息已更新。");
+  closeBookEditor();
 }
 
 async function selectChapter(chapter: Chapter) {
@@ -518,28 +826,62 @@ async function restoreLastSession() {
   await restoreReadingPosition(session.scrollTop ?? book.progress?.scrollTop ?? 0);
 }
 
-async function withBusy(task: () => Promise<void>) {
+async function withBusy(task: () => Promise<void>, formatError = formatGeneralError) {
   busy.value = true;
   error.value = "";
   try {
     await task();
   } catch (reason) {
-    error.value = reason instanceof Error ? reason.message : String(reason);
+    error.value = formatError(reason);
   } finally {
     busy.value = false;
   }
 }
 
+async function checkUpdatesQuietly() {
+  if (!desktopRuntime) return;
+  try {
+    const state = await checkForAppUpdate();
+    if (state.status === "available") appUpdateState.value = state;
+  } catch (reason) {
+    console.warn("Failed to check for updates", reason);
+  }
+}
+
+async function installAvailableUpdate() {
+  const state = appUpdateState.value;
+  if (state.status !== "available") return;
+
+  try {
+    await downloadAndInstallAppUpdate(state.update, (nextState) => {
+      appUpdateState.value = nextState;
+    });
+  } catch (reason) {
+    appUpdateState.value = {
+      status: "error",
+      message: reason instanceof Error ? reason.message : "更新失败，请稍后重试。",
+    };
+  }
+}
+
+function dismissUpdateNotice() {
+  appUpdateState.value = { status: "idle" };
+}
+
 onMounted(() => {
   void restoreLastSession();
+  void checkUpdatesQuietly();
 });
 
 onMounted(() => {
   window.addEventListener("beforeunload", saveReadingProgress);
 });
 
+watch(readingSettings, saveReadingSettings, { deep: true });
+
 onBeforeUnmount(() => {
   if (progressSaveTimer !== null) window.clearTimeout(progressSaveTimer);
+  if (noticeTimer !== null) window.clearTimeout(noticeTimer);
   window.removeEventListener("beforeunload", saveReadingProgress);
   saveReaderSession();
   void saveReadingProgress();
@@ -547,6 +889,47 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <aside
+    v-if="
+      appUpdateState.status === 'available' ||
+      appUpdateState.status === 'downloading' ||
+      appUpdateState.status === 'ready' ||
+      appUpdateState.status === 'error'
+    "
+    class="update-banner"
+  >
+    <div>
+      <strong v-if="appUpdateState.status === 'available'">
+        发现新版本 v{{ appUpdateState.version }}
+      </strong>
+      <strong v-else-if="appUpdateState.status === 'downloading'">
+        {{ appUpdateProgressText }}
+      </strong>
+      <strong v-else-if="appUpdateState.status === 'ready'">更新已安装</strong>
+      <strong v-else>更新检查失败</strong>
+      <span v-if="appUpdateState.status === 'available'">安装后会自动重启应用</span>
+      <span v-else-if="appUpdateState.status === 'error'">{{ appUpdateState.message }}</span>
+      <span v-else-if="appUpdateState.status === 'ready'">应用即将重启</span>
+    </div>
+    <button
+      v-if="appUpdateState.status === 'available'"
+      type="button"
+      @click="installAvailableUpdate"
+    >
+      立即更新
+    </button>
+    <button
+      v-if="appUpdateState.status === 'available' || appUpdateState.status === 'error'"
+      type="button"
+      class="update-dismiss"
+      @click="dismissUpdateNotice"
+    >
+      稍后
+    </button>
+  </aside>
+
+  <p v-if="notice" class="app-notice">{{ notice }}</p>
+
   <main v-if="appView === 'library'" class="library-page">
     <header class="library-topbar">
       <div class="app-mark">
@@ -559,7 +942,7 @@ onBeforeUnmount(() => {
 
       <div class="topbar-actions">
         <button v-if="desktopRuntime" type="button" :disabled="busy" @click="importDesktopFile">
-          选择文本
+          选择文件
         </button>
       </div>
     </header>
@@ -593,13 +976,17 @@ onBeforeUnmount(() => {
           :class="{ active: activeBook?.id === book.id }"
         >
           <button type="button" class="book-cover" @click="openBook(book)">
-            <span>{{ book.title.slice(0, 1) }}</span>
+            <span>{{ coverTextForBook(book) }}</span>
           </button>
           <div class="book-card-body">
             <button type="button" class="book-title-button" @click="openBook(book)">
               {{ book.title }}
             </button>
-            <p>{{ book.chapters?.length ?? 0 }} 章 · {{ book.format.toUpperCase() }}</p>
+            <p class="book-meta-line">
+              <span v-if="book.author">{{ book.author }} · </span>{{ book.chapters?.length ?? 0 }} 章 ·
+              {{ book.format.toUpperCase() }}
+            </p>
+            <p v-if="book.category" class="book-category">{{ book.category }}</p>
             <div class="book-progress">
               <div class="book-progress-copy">
                 <span>{{ getBookProgressLabel(book) }}</span>
@@ -611,6 +998,7 @@ onBeforeUnmount(() => {
             </div>
             <div class="book-card-actions">
               <button type="button" class="primary-link" @click="openBook(book)">阅读</button>
+              <button type="button" class="secondary-link" @click.stop="openBookEditor(book)">编辑</button>
               <button
                 type="button"
                 class="danger-link"
@@ -625,7 +1013,7 @@ onBeforeUnmount(() => {
       </div>
 
       <div v-else class="empty-library">
-        <span class="empty-icon">TXT</span>
+        <span class="empty-icon">FILE</span>
         <h3>书架为空</h3>
       </div>
     </section>
@@ -675,17 +1063,164 @@ onBeforeUnmount(() => {
         </article>
       </div>
     </section>
+
+    <aside v-if="editingBookId" class="book-editor-panel">
+      <div class="book-editor-header">
+        <div>
+          <p class="eyebrow">BOOK INFO</p>
+          <h2>编辑书籍信息</h2>
+        </div>
+        <button type="button" aria-label="关闭编辑" @click="closeBookEditor">×</button>
+      </div>
+
+      <label class="book-editor-field">
+        <span>书名</span>
+        <input v-model="bookDraft.title" type="text" placeholder="请输入书名" />
+      </label>
+      <label class="book-editor-field">
+        <span>作者</span>
+        <input v-model="bookDraft.author" type="text" placeholder="可选" />
+      </label>
+      <label class="book-editor-field">
+        <span>分类</span>
+        <input v-model="bookDraft.category" type="text" placeholder="例如：玄幻、悬疑、笔记" />
+      </label>
+      <label class="book-editor-field">
+        <span>封面字</span>
+        <input v-model="bookDraft.coverText" type="text" maxlength="2" placeholder="1-2 个字" />
+      </label>
+
+      <div class="book-editor-actions">
+        <button type="button" class="ghost-button" @click="closeBookEditor">取消</button>
+        <button type="button" class="primary-link" @click="saveBookDetails">保存</button>
+      </div>
+    </aside>
   </main>
 
-  <main v-else class="reader-page">
+  <main v-else class="reader-page" :class="readerPageClass">
     <header class="reader-topbar">
       <button type="button" class="ghost-button" @click="openLibrary">‹ 书库</button>
       <div class="reader-book-title">
         <p class="eyebrow">{{ activeBook?.format.toUpperCase() }} · {{ activeBook?.chapters?.length ?? 0 }} 章</p>
         <h1>{{ activeBook?.title }}</h1>
       </div>
-      <div class="reader-spacer"></div>
+      <div class="reader-topbar-actions">
+        <button type="button" class="ghost-button" @click="searchPanelOpen = !searchPanelOpen; readingSettingsOpen = false">
+          搜索
+        </button>
+        <button type="button" class="ghost-button" @click="readingSettingsOpen = !readingSettingsOpen; searchPanelOpen = false">
+          阅读设置
+        </button>
+      </div>
     </header>
+
+    <aside v-if="readingSettingsOpen" class="reading-settings-panel">
+      <div class="reading-settings-header">
+        <div>
+          <p class="eyebrow">READING</p>
+          <h2>阅读设置</h2>
+        </div>
+        <button type="button" aria-label="关闭阅读设置" @click="readingSettingsOpen = false">×</button>
+      </div>
+
+      <label class="setting-row">
+        <span>字号</span>
+        <input v-model.number="readingSettings.fontSize" type="range" min="15" max="28" step="1" />
+        <strong>{{ readingSettings.fontSize }}px</strong>
+      </label>
+
+      <label class="setting-row">
+        <span>行距</span>
+        <input v-model.number="readingSettings.lineHeight" type="range" min="1.5" max="2.8" step="0.1" />
+        <strong>{{ readingSettings.lineHeight.toFixed(1) }}</strong>
+      </label>
+
+      <label class="setting-row">
+        <span>页宽</span>
+        <input v-model.number="readingSettings.pageWidth" type="range" min="680" max="1280" step="20" />
+        <strong>{{ readingSettings.pageWidth }}px</strong>
+      </label>
+
+      <label class="setting-field">
+        <span>字体</span>
+        <select v-model="readingSettings.font">
+          <option value="system">系统默认</option>
+          <option value="serif">西文衬线</option>
+          <option value="songti">宋体</option>
+          <option value="kaiti">楷体</option>
+          <option value="fangsong">仿宋</option>
+          <option value="yuanti">圆体</option>
+          <option value="hei">黑体</option>
+          <option value="mono">等宽</option>
+        </select>
+      </label>
+
+      <div class="setting-field">
+        <span>背景</span>
+        <div class="theme-options">
+          <button
+            type="button"
+            class="theme-swatch paper"
+            :class="{ active: readingSettings.theme === 'paper' }"
+            aria-label="纸张"
+            @click="readingSettings.theme = 'paper'"
+          />
+          <button
+            type="button"
+            class="theme-swatch eye"
+            :class="{ active: readingSettings.theme === 'eye' }"
+            aria-label="护眼"
+            @click="readingSettings.theme = 'eye'"
+          />
+          <button
+            type="button"
+            class="theme-swatch sepia"
+            :class="{ active: readingSettings.theme === 'sepia' }"
+            aria-label="暖色"
+            @click="readingSettings.theme = 'sepia'"
+          />
+          <button
+            type="button"
+            class="theme-swatch dark"
+            :class="{ active: readingSettings.theme === 'dark' }"
+            aria-label="夜间"
+            @click="readingSettings.theme = 'dark'"
+          />
+        </div>
+      </div>
+
+      <button type="button" class="settings-reset" @click="resetReadingSettings">恢复默认</button>
+    </aside>
+
+    <aside v-if="searchPanelOpen" class="search-panel">
+      <div class="search-panel-header">
+        <div>
+          <p class="eyebrow">SEARCH</p>
+          <h2>书内搜索</h2>
+        </div>
+        <button type="button" aria-label="关闭搜索" @click="searchPanelOpen = false">×</button>
+      </div>
+
+      <input v-model="searchQuery" type="search" placeholder="输入关键词，跳到对应段落" />
+
+      <p v-if="searchQuery" class="search-summary">
+        找到 {{ searchResults.length }} 处{{ searchResults.length >= 80 ? "，已显示前 80 处" : "" }}
+      </p>
+
+      <div v-if="searchResults.length > 0" class="search-result-list">
+        <button
+          v-for="result in searchResults"
+          :key="result.id"
+          type="button"
+          @click="openSearchResult(result)"
+        >
+          <span>{{ result.chapterTitle }}</span>
+          <strong>{{ result.snippet }}</strong>
+        </button>
+      </div>
+
+      <p v-else-if="searchQuery" class="search-empty">没有找到相关内容</p>
+    </aside>
 
     <section v-if="activeBook" class="reader-layout" :class="{ 'chapter-collapsed': chapterListCollapsed }">
       <aside class="chapter-panel" :class="{ collapsed: chapterListCollapsed }">
@@ -713,6 +1248,7 @@ onBeforeUnmount(() => {
       <article
         ref="chapterContentRef"
         class="chapter-content"
+        :style="chapterContentStyle"
         @scroll="queueReadingProgressSave"
         @mouseup="updateSelectedText"
         @keyup="updateSelectedText"

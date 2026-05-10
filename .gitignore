@@ -28,3 +28,8 @@ src-tauri/gen本地书库/
 
 src-tauri/gen/
 本地书库/
+
+# Tauri updater signing keys must never be committed.
+*.key
+*.key.pub
+*.minisign

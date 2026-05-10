@@ -10,7 +10,10 @@ export type Book = {
   id: string;
   title: string;
   author?: string;
-  format: "txt" | "md" | "epub" | "unknown";
+  category?: string;
+  coverText?: string;
+  contentHash?: string;
+  format: "txt" | "md" | "pdf" | "docx" | "epub" | "rtf" | "html" | "fb2" | "odt" | "unknown";
   createdAt: number;
 
   // txt/md 存原文；epub 第一版可不存

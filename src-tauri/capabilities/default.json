@@ -6,6 +6,8 @@
   "permissions": [
     "core:default",
     "dialog:default",
-    "fs:read-files"
+    "fs:read-files",
+    "process:default",
+    "updater:default"
   ]
 }
